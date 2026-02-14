@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node --env-file=.env src/server.js",
+    "start": "node src/server.js",
     "dev": "nodemon --env-file=.env src/server.js",
     "test": "jest --coverage --passWithNoTests",
     "lint": "eslint src",
