@@ -32,8 +32,16 @@ export const apiLimiter = createRateLimiter(
 
 export const authLimiter = createRateLimiter(
   15 * 60 * 1000, // 15 minutes
-  5, // 5 requests per window for auth
+  30, // 30 requests per window for auth (login/signup)
   "Too many login attempts, please try again later."
+);
+
+// Refresh-token can be called on page load and on 401 recovery.
+// Keep it rate-limited, but not so strict that normal usage locks users out.
+export const refreshTokenLimiter = createRateLimiter(
+  15 * 60 * 1000, // 15 minutes
+  120, // 120 refresh attempts per window
+  "Too many refresh attempts, please try again later."
 );
 
 export const paymentLimiter = createRateLimiter(

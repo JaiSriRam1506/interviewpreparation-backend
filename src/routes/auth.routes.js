@@ -11,14 +11,14 @@ import {
   getMe,
 } from "../controllers/auth.controller.js";
 import { validate, authSchemas } from "../middleware/validation.js";
-import { authLimiter } from "../middleware/rateLimiter.js";
+import { authLimiter, refreshTokenLimiter } from "../middleware/rateLimiter.js";
 import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
 
 router.post("/signup", authLimiter, validate(authSchemas.register), signup);
 router.post("/login", authLimiter, validate(authSchemas.login), login);
-router.post("/refresh-token", refreshToken);
+router.post("/refresh-token", refreshTokenLimiter, refreshToken);
 
 router.post("/forgot-password", forgotPassword);
 router.patch(
