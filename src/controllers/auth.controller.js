@@ -111,6 +111,7 @@ const createSendToken = async (user, statusCode, req, res) => {
   res.status(statusCode).json({
     status: "success",
     accessToken,
+    refreshToken,
     data: {
       user,
     },
@@ -200,7 +201,14 @@ export const login = async (req, res, next) => {
 
 export const logout = async (req, res) => {
   try {
-    const { refreshToken } = req.cookies;
+    const cookieToken = req.cookies?.refreshToken;
+    const bodyToken = req.body?.refreshToken;
+    const headerToken =
+      req.headers["x-refresh-token"] || req.headers["x-refreshtoken"];
+    const refreshToken =
+      cookieToken ||
+      (typeof bodyToken === "string" ? bodyToken : null) ||
+      (typeof headerToken === "string" ? headerToken : null);
     let decoded;
     if (refreshToken) {
       try {
@@ -259,7 +267,14 @@ export const logout = async (req, res) => {
 
 export const refreshToken = async (req, res, next) => {
   try {
-    const { refreshToken } = req.cookies;
+    const cookieToken = req.cookies?.refreshToken;
+    const bodyToken = req.body?.refreshToken;
+    const headerToken =
+      req.headers["x-refresh-token"] || req.headers["x-refreshtoken"];
+    const refreshToken =
+      cookieToken ||
+      (typeof bodyToken === "string" ? bodyToken : null) ||
+      (typeof headerToken === "string" ? headerToken : null);
 
     if (!refreshToken) {
       return res.status(401).json({
