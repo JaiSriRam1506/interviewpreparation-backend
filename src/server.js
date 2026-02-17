@@ -44,6 +44,28 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const httpServer = createServer(app);
 
+// Render (and most cloud hosts) run Node behind a reverse proxy that sets
+// `X-Forwarded-For`. express-rate-limit validates this and will throw if
+// `trust proxy` is not enabled.
+// Use TRUST_PROXY=1 (default in production) to trust the first proxy hop.
+try {
+  const isProduction = process.env.NODE_ENV === "production";
+  const trustProxy = String(
+    process.env.TRUST_PROXY || (isProduction ? "1" : "0")
+  )
+    .trim()
+    .toLowerCase();
+
+  if (["1", "true", "yes", "on"].includes(trustProxy)) {
+    app.set("trust proxy", 1);
+  } else if (trustProxy && trustProxy !== "0" && trustProxy !== "false") {
+    // Allow advanced express formats like "loopback" or a subnet.
+    app.set("trust proxy", trustProxy);
+  }
+} catch {
+  // ignore
+}
+
 const buildCorsOriginChecker = () => {
   const isProduction = process.env.NODE_ENV === "production";
 
@@ -719,6 +741,28 @@ const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
     logger.info("MongoDB connected successfully");
+
+    // If an older deployment created a TTL index on `expiresAt`, Mongo will
+    // auto-delete session documents (and transcripts) once expired.
+    // Users expect sessions to remain until they explicitly delete them.
+    try {
+      const indexes = await Session.collection.indexes();
+      const ttlIndexes = (indexes || []).filter(
+        (idx) =>
+          idx?.key &&
+          idx.key.expiresAt === 1 &&
+          Object.prototype.hasOwnProperty.call(idx, "expireAfterSeconds")
+      );
+
+      for (const idx of ttlIndexes) {
+        const name = String(idx?.name || "").trim();
+        if (!name) continue;
+        await Session.collection.dropIndex(name);
+        logger.info(`Dropped TTL index on sessions.expiresAt: ${name}`);
+      }
+    } catch {
+      // ignore (insufficient privileges / not found / etc.)
+    }
   } catch (error) {
     logger.error("MongoDB connection failed:", error);
     process.exit(1);

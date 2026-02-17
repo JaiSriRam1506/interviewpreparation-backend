@@ -52,6 +52,86 @@ const ensureSessionActive = async (session) => {
   throw new AppError("Session not active", 409);
 };
 
+const getSessionForUser = async ({ sessionId, userId }) => {
+  const id = String(sessionId || "").trim();
+  const uid = String(userId || "").trim();
+  if (!id) throw new AppError("Session not found", 404);
+  if (!uid) throw new AppError("Unauthorized", 401);
+
+  const session = await Session.findOne({ _id: id, user: uid });
+  if (!session) throw new AppError("Session not found", 404);
+  return session;
+};
+
+const persistQaPair = async ({
+  session,
+  question,
+  answer,
+  sttProvider,
+  sttModel,
+  llmModel,
+  provider,
+}) => {
+  if (!session) return;
+  const q = String(question || "").trim();
+  const a = String(answer || "").trim();
+  if (!q || !a) return;
+
+  const sttP = String(
+    sttProvider || session?.settings?.sttProvider || ""
+  ).trim();
+  const sttM = String(sttModel || session?.settings?.sttModel || "").trim();
+  const llmM = String(llmModel || session?.settings?.aiModel || "").trim();
+  const prov = String(provider || "").trim();
+
+  const msgs = session.messages || [];
+  const last = msgs[msgs.length - 1];
+  const prev = msgs[msgs.length - 2];
+
+  // Avoid accidental duplicates when clients retry.
+  const alreadySaved =
+    prev?.role === "user" &&
+    last?.role === "assistant" &&
+    String(prev?.kind || "") === "qa" &&
+    String(last?.kind || "") === "qa" &&
+    String(prev?.content || "").trim() === q &&
+    String(last?.content || "").trim() === a;
+
+  if (alreadySaved) return;
+
+  session.addMessage({
+    role: "user",
+    kind: "qa",
+    content: q,
+    tokens: 0,
+    meta: {
+      ...(sttP ? { sttProvider: sttP } : {}),
+      ...(sttM ? { sttModel: sttM } : {}),
+      ...(llmM ? { llmModel: llmM } : {}),
+      ...(prov ? { provider: prov } : {}),
+    },
+  });
+  session.addMessage({
+    role: "assistant",
+    kind: "qa",
+    content: a,
+    tokens: 0,
+    meta: {
+      ...(llmM ? { llmModel: llmM } : {}),
+      ...(prov ? { provider: prov } : {}),
+    },
+  });
+
+  await session.save();
+
+  try {
+    const io = getIO();
+    io?.to(`session_${session._id}`).emit("new_message", { ok: true });
+  } catch {
+    // ignore
+  }
+};
+
 const tryConvertToWav16kMono = async ({ buffer }) => {
   if (!buffer || !Buffer.isBuffer(buffer)) return null;
   if (!ffmpegPath || typeof ffmpegPath !== "string") return null;
@@ -748,6 +828,26 @@ export const aiAnswer = async (req, res, next) => {
       draft
     );
     const text = String(response?.content || "").trim();
+
+    const persist =
+      req.body?.persist === true ||
+      String(req.body?.persist || "").toLowerCase() === "true";
+
+    if (persist) {
+      try {
+        await persistQaPair({
+          session,
+          question,
+          answer: normalizeAiAnswerTranscript(text),
+          sttProvider: req.body?.sttProvider,
+          sttModel: req.body?.sttModel,
+          llmModel: response?.model || session?.settings?.aiModel,
+        });
+      } catch {
+        // Don't fail the request if persistence fails.
+      }
+    }
+
     res.status(200).json({
       status: "success",
       text,
@@ -1233,9 +1333,13 @@ export const aiAnswerParakeet = async (req, res, next) => {
   ).trim();
   const rawASR = String(req.body?.rawASR || "");
   const cleanedOverride = String(req.body?.cleaned || "").trim();
+  // Default to persisting Q/A so transcripts are reliably stored.
+  // Clients can disable by sending persist=false explicitly.
   const persist =
-    req.body?.persist === true ||
-    String(req.body?.persist || "").toLowerCase() === "true";
+    req.body?.persist === false ||
+    String(req.body?.persist || "").toLowerCase() === "false"
+      ? false
+      : true;
 
   const hasAnyProviderKey =
     Boolean(process.env.GROQ_API_KEY) ||
@@ -1382,6 +1486,10 @@ export const aiAnswerParakeet = async (req, res, next) => {
           .trim()
           .slice(0, 20000);
 
+        const sttProvider = String(session?.settings?.sttProvider || "").trim();
+        const sttModel = String(session?.settings?.sttModel || "").trim();
+        const llmModel = String(response?.model || model || "").trim();
+
         const lastMsg = Array.isArray(session.messages)
           ? session.messages[session.messages.length - 1]
           : null;
@@ -1403,16 +1511,27 @@ export const aiAnswerParakeet = async (req, res, next) => {
         if (questionToSave && !alreadyHasUser) {
           session.addMessage({
             role: "user",
+            kind: "qa",
             content: questionToSave,
             tokens: 0,
+            meta: {
+              ...(sttProvider ? { sttProvider } : {}),
+              ...(sttModel ? { sttModel } : {}),
+              ...(llmModel ? { llmModel } : {}),
+            },
           });
         }
 
         if (answerToSave && !alreadyHasAssistant) {
           session.addMessage({
             role: "assistant",
+            kind: "qa",
             content: answerToSave,
             tokens: 0,
+            meta: {
+              ...(llmModel ? { llmModel } : {}),
+              ...(provider ? { provider } : {}),
+            },
           });
         }
 
@@ -1627,6 +1746,25 @@ export const aiAnswerStream = async (req, res, next) => {
       });
     }
 
+    const persist =
+      req.body?.persist === true ||
+      String(req.body?.persist || "").toLowerCase() === "true";
+    if (persist) {
+      try {
+        await persistQaPair({
+          session,
+          question,
+          answer: normalizeAiAnswerTranscript(fullText),
+          sttProvider: req.body?.sttProvider,
+          sttModel: req.body?.sttModel,
+          llmModel: upstream.model || session?.settings?.aiModel,
+          provider: upstream.provider,
+        });
+      } catch {
+        // Don't fail the stream if persistence fails.
+      }
+    }
+
     const totalMs = Date.now() - startedAt;
 
     writeSseEvent(res, {
@@ -1658,6 +1796,40 @@ export const aiAnswerStream = async (req, res, next) => {
       // ignore
     }
     res.end();
+  }
+};
+
+export const persistTranscriptQa = async (req, res, next) => {
+  try {
+    const session = await getSessionForUser({
+      sessionId: req.params.id,
+      userId: req.user?._id,
+    });
+
+    const question = String(req.body?.question || "").trim();
+    const answer = String(req.body?.answer || "").trim();
+    const sttProvider = String(req.body?.sttProvider || "").trim();
+    const sttModel = String(req.body?.sttModel || "").trim();
+    const llmModel = String(req.body?.llmModel || "").trim();
+    const provider = String(req.body?.provider || "").trim();
+
+    if (!question || !answer) {
+      return next(new AppError("question and answer are required", 400));
+    }
+
+    await persistQaPair({
+      session,
+      question,
+      answer,
+      sttProvider,
+      sttModel,
+      llmModel,
+      provider,
+    });
+
+    res.status(201).json({ status: "success" });
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -2037,7 +2209,7 @@ export const downloadTranscript = async (req, res, next) => {
   const session = await Session.findOne({
     _id: req.params.id,
     user: req.user._id,
-  }).select("messages job createdAt");
+  }).select("messages job createdAt settings");
   if (!session) return next(new AppError("Session not found", 404));
 
   const lines = [];
@@ -2046,12 +2218,45 @@ export const downloadTranscript = async (req, res, next) => {
   );
   lines.push(`Created: ${new Date(session.createdAt).toISOString()}`);
   lines.push("---");
-  for (const msg of session.messages || []) {
-    lines.push(
-      `[${new Date(msg.timestamp).toISOString()}] ${msg.role.toUpperCase()}:`
-    );
-    lines.push(String(msg.content || ""));
-    lines.push("");
+
+  const all = session.messages || [];
+  const qa = all.filter((m) => String(m?.kind || "") === "qa");
+  const msgsToWrite = qa.length > 0 ? qa : all;
+
+  if (qa.length > 0) {
+    for (const msg of msgsToWrite) {
+      const ts = msg?.timestamp ? new Date(msg.timestamp).toISOString() : "";
+      if (msg.role === "user") {
+        lines.push(`[${ts}] QUESTION:`);
+        const sttP = String(msg?.meta?.sttProvider || "").trim();
+        const sttM = String(msg?.meta?.sttModel || "").trim();
+        const llmM = String(msg?.meta?.llmModel || "").trim();
+        const parts = [];
+        if (sttP || sttM)
+          parts.push(`STT: ${[sttP, sttM].filter(Boolean).join("/")}`);
+        if (llmM) parts.push(`LLM: ${llmM}`);
+        if (parts.length) lines.push(parts.join(" | "));
+        lines.push(String(msg.content || ""));
+        lines.push("");
+        continue;
+      }
+
+      if (msg.role === "assistant") {
+        lines.push(`[${ts}] ANSWER:`);
+        lines.push(String(msg.content || ""));
+        lines.push("");
+        continue;
+      }
+    }
+  } else {
+    // Back-compat: old sessions stored mixed message types.
+    for (const msg of msgsToWrite) {
+      lines.push(
+        `[${new Date(msg.timestamp).toISOString()}] ${msg.role.toUpperCase()}:`
+      );
+      lines.push(String(msg.content || ""));
+      lines.push("");
+    }
   }
 
   const body = lines.join("\n");

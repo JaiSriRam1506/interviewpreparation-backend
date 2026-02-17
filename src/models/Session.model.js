@@ -139,12 +139,26 @@ const sessionSchema = new mongoose.Schema(
           type: String,
           enum: ["user", "assistant", "system"],
         },
+        // Optional categorization to support transcript exports.
+        // We intentionally keep this loose for backwards compatibility.
+        kind: {
+          type: String,
+          default: undefined,
+        },
         content: String,
         timestamp: {
           type: Date,
           default: Date.now,
         },
         tokens: Number,
+        // Optional metadata about how this message was produced.
+        // Example: STT provider/model for the question; LLM model for the answer.
+        meta: {
+          sttProvider: { type: String, default: undefined },
+          sttModel: { type: String, default: undefined },
+          llmModel: { type: String, default: undefined },
+          provider: { type: String, default: undefined },
+        },
         evaluation: {
           score: Number,
           feedback: String,
@@ -203,7 +217,9 @@ const sessionSchema = new mongoose.Schema(
 sessionSchema.index({ user: 1, status: 1 });
 sessionSchema.index({ status: 1 });
 sessionSchema.index({ createdAt: -1 });
-sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+// Keep an index for queries/sorting, but do NOT auto-delete sessions.
+// Users expect transcripts to remain until they manually delete the session.
+sessionSchema.index({ expiresAt: 1 });
 
 // Virtuals
 sessionSchema.virtual("durationUsed").get(function () {

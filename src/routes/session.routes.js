@@ -20,6 +20,7 @@ import {
   aiAnswerStream,
   analyzeScreen,
   downloadTranscript,
+  persistTranscriptQa,
 } from "../controllers/session.controller.js";
 import { protect } from "../middleware/auth.js";
 
@@ -96,6 +97,8 @@ router.post("/:id/ai-response", aiResponse);
 router.post("/:id/ai-answer/stream", aiAnswerStream);
 router.post("/:id/ai-answer", aiAnswer);
 router.post("/:id/ai-answer/parakeet", aiAnswerParakeet);
+// Persist client-generated Q/A (e.g., Groq-direct browser streaming).
+router.post("/:id/transcript/qa", persistTranscriptQa);
 router.post("/:id/analyze-screen", imageUpload.single("image"), analyzeScreen);
 
 router.post("/:id/transcribe", audioUpload.single("audio"), transcribeAudio);
