@@ -30,6 +30,10 @@ import Session from "./models/Session.model.js";
 import scrapeRoutes from "./routes/scrape.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import sttRoutes from "./routes/stt.routes.js";
+import screenShareRoutes from "./routes/screenShare.routes.js";
+
+import { startScreenShareCleanupCron } from "./screenShare/screenShareCleanup.js";
+import { setupScreenShareSignalingServer } from "./screenShare/screenShareSignaling.js";
 
 // Import middleware
 import errorHandler from "./middleware/errorHandler.js";
@@ -225,6 +229,9 @@ const io = new Server(httpServer, {
 
 setIO(io);
 
+// Screen-share signaling (kept separate from existing socket features)
+setupScreenShareSignalingServer(io);
+
 io.use((socket, next) => {
   try {
     const token = socket.handshake?.auth?.token;
@@ -330,6 +337,10 @@ app.use("/api/v1/scrape", scrapeRoutes);
 app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/stt", sttRoutes);
+
+// Screen share API (mounted with and without /v1 for compatibility)
+app.use("/api/v1/screen-share", screenShareRoutes);
+app.use("/api/screen-share", screenShareRoutes);
 
 // Health check
 app.get("/health", (req, res) => {
@@ -772,6 +783,9 @@ const connectDB = async () => {
 // Start server
 const startServer = async () => {
   await connectDB();
+
+  // Cron cleanup for expired screen-share sessions
+  startScreenShareCleanupCron(logger);
 
   const PORT = process.env.PORT || 5000;
   httpServer.listen(PORT, () => {

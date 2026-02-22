@@ -344,6 +344,9 @@ class AIService {
       "Writing rules:\n" +
       "- Use **bold** for important terms naturally.\n" +
       "- Use `backticks` for code elements.\n" +
+      "- NEVER return an answer that is only code or mostly a code block.\n" +
+      "- The first line MUST be a plain-English sentence (not a list item, no code fences).\n" +
+      "- Even if you include code, you must include multiple non-code bullets too.\n" +
       "- Keep explanations tight and verbal.\n\n";
 
     if (includeCode) {

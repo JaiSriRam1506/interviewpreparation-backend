@@ -1185,6 +1185,23 @@ const coerceParakeetShape = ({ parsed, rawASR }) => {
   if (!out.detailed_explanation)
     out.detailed_explanation = out.explanation || "";
 
+  // If the model returns only code (or explanation is empty), force a minimal spoken explanation.
+  if (!out.explanation && out.code_example && out.code_example.code) {
+    out.explanation =
+      "I’ll start with the approach in plain English, then show a short code sketch.";
+  }
+  if (!out.detailed_explanation)
+    out.detailed_explanation = out.explanation || out.detailed_explanation || "";
+
+  if (!out.bullets.length) {
+    out.bullets = [
+      "Clarify inputs/outputs and constraints up front.",
+      "Pick the simplest correct approach, then optimize if needed.",
+      "Call out edge cases and time/space complexity briefly.",
+      "Walk through one example to validate correctness.",
+    ];
+  }
+
   return out;
 };
 
@@ -1195,16 +1212,63 @@ const buildFallbackParakeetFromText = ({ text, rawASR }) => {
   const firstSentence =
     (t.match(/^[\s\S]{1,240}?[.!?](\s|$)/)?.[0] || "").trim() || firstNonEmpty;
 
+  const extractFirstFencedCode = (value) => {
+    const src = String(value || "");
+    const re = /```\s*([a-z0-9_-]+)?\s*\n([\s\S]*?)\n```/i;
+    const m = src.match(re);
+    if (!m) return null;
+    return {
+      language: String(m[1] || "").trim() || "javascript",
+      code: String(m[2] || "").trim(),
+      stripped: src.replace(re, "").trim(),
+    };
+  };
+
+  const looksLikeCodeOnly = (value) => {
+    const src = String(value || "").trim();
+    if (!src) return false;
+    const ls = src.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (ls.length < 3) return false;
+    const codey = ls.filter((l) => /[{}();]|=>|\b(const|let|var|function|class|return)\b/.test(l));
+    // Heuristic: if a large fraction of non-empty lines look like code, treat it as code-only.
+    return codey.length / ls.length >= 0.6;
+  };
+
+  let explanationText = t;
+  let codeExample = null;
+
+  const fenced = extractFirstFencedCode(t);
+  if (fenced && fenced.code) {
+    codeExample = { language: fenced.language, code: fenced.code };
+    explanationText = String(fenced.stripped || "").trim();
+  } else if (looksLikeCodeOnly(t)) {
+    codeExample = { language: "javascript", code: t };
+    explanationText = "";
+  }
+
   const bullets = lines
     .map((l) => l.replace(/^[-*•]+\s*/, "").trim())
     .filter((l) => l && l.length <= 180);
 
+  const safeExplanation = explanationText
+    ? explanationText
+    : "I’ll explain the approach first, then show a short code sketch.";
+
+  const safeBullets = bullets.length
+    ? bullets.slice(0, 6)
+    : [
+        "Clarify inputs/outputs and constraints.",
+        "State the core idea and why it works.",
+        "Mention complexity and edge cases.",
+        "Then show a short, readable code sketch.",
+      ];
+
   return {
     short_definition: firstSentence || firstNonEmpty || "",
     tl_dr: firstSentence || firstNonEmpty || "",
-    bullets: bullets.slice(0, 6),
-    explanation: t,
-    code_example: null,
+    bullets: safeBullets,
+    explanation: safeExplanation,
+    code_example: codeExample,
     common_pitfalls: [],
     interview_talking_points: [],
     follow_up_questions: [],
